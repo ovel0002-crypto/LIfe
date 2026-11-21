@@ -1,0 +1,35 @@
+{
+  "name": "@life/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "start": "tsx src/main.ts",
+    "seed": "tsx src/seed.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^1.12.0",
+    "@electric-sql/pglite": "^0.5.17",
+    "@fastify/cors": "^11.4.3",
+    "@fastify/multipart": "^10.1.9",
+    "@fastify/static": "^10.1.12",
+    "@life/core": "workspace:*",
+    "@life/scheduler": "workspace:*",
+    "discord.js": "^14.28.1",
+    "drizzle-orm": "^0.45.4",
+    "fastify": "^5.12.8",
+    "googleapis": "^190.0.0",
+    "luxon": "^3.7.2",
+    "node-ical": "^0.27.6",
+    "pg": "^8.23.1",
+    "web-push": "^4.0.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/luxon": "^3.7.6",
+    "@types/pg": "^8.23.1",
+    "@types/web-push": "^3.6.4",
+    "drizzle-kit": "^0.31.11"
+  }
+}
