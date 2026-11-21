@@ -1,0 +1,59 @@
+# Life on a small VPS (or later, the homelab): `docker compose up -d` from this folder.
+# Moving hosts = copy this folder + .env, restore the Postgres backup, `docker compose up -d`.
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: life
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: life
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U life"]
+      interval: 10s
+      retries: 5
+
+  life:
+    build: ..
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://life:${POSTGRES_PASSWORD}@postgres:5432/life
+    depends_on:
+      postgres:
+        condition: service_healthy
+    expose:
+      - "8787"
+
+  # HTTPS with automatic certificates (required for iOS home-screen push).
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      LIFE_DOMAIN: ${LIFE_DOMAIN:?set LIFE_DOMAIN in .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy:/data
+
+  # Nightly database dump into ./backups (prune old files yourself, or add a cron).
+  backup:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - ./backups:/backups
+    entrypoint: ["/bin/sh", "-c", "while true; do pg_dump -h postgres -U life life | gzip > /backups/life-$$(date +%F).sql.gz; sleep 86400; done"]
+    depends_on:
+      - postgres
+
+volumes:
+  pgdata:
+  caddy:
+# Memory (optional): run Eunomia's own compose stack next to this one (see README → Memory),
+# then set EUNOMIA_URL and EUNOMIA_TOKEN in .env.

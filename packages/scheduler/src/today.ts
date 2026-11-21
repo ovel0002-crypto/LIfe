@@ -9,6 +9,8 @@ export interface TodayItem {
   taskId?: string;
   eventId?: string;
   questionId?: string;
+  /** Plan block backing this item (for check-ins). */
+  blockId?: string;
   title: string;
   minutes?: number;
   start?: string;
@@ -90,7 +92,7 @@ export function buildToday(input: TodayInput): TodayList {
     if (e.certainty === "maybe" || e.certainty === "unknown-time") continue;
     const s = ms(e.start);
     const en = ms(e.end);
-    if (en < dayStartMs || s > dayEnd) continue;
+    if (en < now || s > dayEnd) continue; // finished events drop off the list
     if (e.lock !== "hard") continue;
     must.push({
       key: `e:${e.id}`,
@@ -165,6 +167,8 @@ export function buildToday(input: TodayInput): TodayList {
     .filter((t) => !t.earliestStart || ms(t.earliestStart) <= dayEnd)
     .map((t) => ({ t, rem: remainingMinutes(t, prefs) }))
     .filter(({ rem }) => rem > 0)
+    // Big deadline work belongs in planned blocks, not "could do".
+    .filter(({ t, rem }) => rem <= 60 || !t.due)
     .sort((a, b) => {
       const qa = a.rem <= 20 ? 0 : 1;
       const qb = b.rem <= 20 ? 0 : 1;
@@ -233,6 +237,7 @@ export function buildToday(input: TodayInput): TodayList {
         ...item,
         start: pick.start,
         end: pick.end,
+        blockId: pick.id,
         timeLabel: current
           ? `now until ${formatTime(ms(pick.end), zone)}`
           : `next at ${formatTime(ms(pick.start), zone)}`,

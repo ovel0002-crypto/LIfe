@@ -78,6 +78,14 @@ export class WeeklyReview {
     return s;
   }
 
+  async setShort(short: boolean) {
+    const s = await this.state();
+    s.short = short;
+    const { key } = await this.weekKey();
+    await this.store.setKv(`review:${key}`, s);
+    return s;
+  }
+
   /** Data for every step, in one call (the app renders cards from this). */
   async data() {
     const state = await this.state();

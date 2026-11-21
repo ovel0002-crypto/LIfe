@@ -1,0 +1,41 @@
+{
+  "expo": {
+    "name": "Life",
+    "slug": "life",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "app.life.assistant"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#E6F4FE",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "favicon": "./assets/favicon.png",
+      "bundler": "metro",
+      "output": "single",
+      "name": "Life",
+      "shortName": "Life",
+      "themeColor": "#F6F5F2",
+      "backgroundColor": "#F6F5F2"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-status-bar"
+    ],
+    "scheme": "life",
+    "backgroundColor": "#F6F5F2",
+    "experiments": {
+      "typedRoutes": false
+    }
+  }
+}

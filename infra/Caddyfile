@@ -1,0 +1,4 @@
+{$LIFE_DOMAIN} {
+	encode gzip
+	reverse_proxy life:8787
+}

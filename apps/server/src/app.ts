@@ -275,6 +275,8 @@ export async function buildApp(s: Services): Promise<FastifyInstance> {
     return s.review.mark(b.step, b.outcome, { short: b.short });
   });
 
+  app.post("/api/review/short", async (req) => s.review.setShort(z.object({ short: z.boolean() }).parse(req.body).short));
+
   // ---------------- Connectors ----------------
   app.get("/api/connectors", async () => ({
     google: await google.connectedAccounts(s.store),
@@ -329,9 +331,10 @@ export async function buildApp(s: Services): Promise<FastifyInstance> {
   const appDir = resolve(config.appDir);
   if (existsSync(appDir)) {
     const { default: fstatic } = await import("@fastify/static");
-    await app.register(fstatic, { root: appDir, wildcard: false });
+    // wildcard + dotfiles: Expo's exported asset paths include pnpm's ".pnpm" directory.
+    await app.register(fstatic, { root: appDir, wildcard: true, dotfiles: "allow" });
     app.setNotFoundHandler((req, reply) => {
-      if (req.url.startsWith("/api/")) return reply.code(404).send({ error: "not found" });
+      if (/^\/(api|assets|_expo)\//.test(req.url)) return reply.code(404).send({ error: "not found" });
       return reply.sendFile("index.html");
     });
   }

@@ -1,4 +1,4 @@
-import webpush from "web-push";
+import * as webpush from "web-push";
 import { inQuietHours, ms } from "@life/scheduler";
 import { config } from "./config";
 import type { Store } from "./store";
