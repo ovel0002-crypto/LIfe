@@ -20,6 +20,8 @@ export default function RootLayout() {
         <Stack.Screen name="(tabs)" />
         <Stack.Screen name="review" options={{ presentation: "modal" }} />
         <Stack.Screen name="closeout" options={{ presentation: "modal" }} />
+        <Stack.Screen name="task/[id]" options={{ presentation: "modal" }} />
+        <Stack.Screen name="capture" />
       </Stack>
     </SafeAreaProvider>
   );

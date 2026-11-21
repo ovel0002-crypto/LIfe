@@ -5,13 +5,12 @@
  */
 import { DateTime } from "luxon";
 import { newId, type CalEvent, type Project, type Task } from "@life/core";
-import { createServices } from "./app";
+import { createServices, type Services } from "./app";
 import { openDb } from "./db";
 
-const db = await openDb();
-const s = createServices(db);
+export async function seedDemo(s: Services, timezone = process.env.TZ_DEMO ?? "Australia/Melbourne") {
 const sys = { actor: "system" as const, reason: "Demo data" };
-const prefs = await s.store.setPrefs({ timezone: process.env.TZ_DEMO ?? "Australia/Melbourne" }, sys);
+const prefs = await s.store.setPrefs({ timezone }, sys);
 const now = DateTime.now().setZone(prefs.timezone);
 const at = (days: number, h: number, m = 0) => now.plus({ days }).set({ hour: h, minute: m, second: 0, millisecond: 0 }).toISO()!;
 const created = now.minus({ days: 3 }).toISO()!;
@@ -55,5 +54,13 @@ await s.store.create(
 
 await s.review.ensureEvent();
 const plan = await s.planner.replan();
-console.log(`Seeded: ${tasks.length} tasks, ${events.length} events, ${plan.blocks.length} planned blocks, ${plan.conflicts.length} conflicts.`);
-process.exit(0);
+return { tasks, events, plan };
+}
+
+const isMain = process.argv[1]?.endsWith("seed.ts");
+if (isMain) {
+  const s = createServices(await openDb());
+  const { tasks, events, plan } = await seedDemo(s);
+  console.log(`Seeded: ${tasks.length} tasks, ${events.length} events, ${plan.blocks.length} planned blocks, ${plan.conflicts.length} conflicts.`);
+  process.exit(0);
+}

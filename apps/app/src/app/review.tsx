@@ -86,6 +86,7 @@ export default function ReviewScreen() {
           <Text style={{ fontSize: 26, fontWeight: "700", color: t.text, letterSpacing: -0.4 }}>{TITLES[current].title}</Text>
           <Text style={{ color: t.sub, fontSize: 15, marginTop: 2, marginBottom: space.lg }}>{TITLES[current].sub}</Text>
 
+          {current === "screenshots" ? <PullsCard /> : null}
           {current === "screenshots" ? (
             <Card style={{ gap: space.md }}>
               {data.screenshots.prompts.map((p) => (
@@ -218,6 +219,34 @@ export default function ReviewScreen() {
         </View>
       )}
     </Screen>
+  );
+}
+
+/** What the automatic pulls (Humanforce, Instagram…) captured this week. */
+function PullsCard() {
+  const t = useTheme();
+  const { data } = useApi<{ pulls: Record<string, { at: string; proposed?: number; summary?: string } | null> }>("/api/pulls");
+  const entries = Object.entries(data?.pulls ?? {});
+  if (!entries.length) return null;
+  const weekAgo = Date.now() - 8 * 86_400_000;
+  return (
+    <Card style={{ gap: 8, marginBottom: space.md }}>
+      <Text style={{ color: t.text, fontWeight: "700" }}>This week's automatic pulls</Text>
+      {entries.map(([id, p]) => {
+        const fresh = p && Date.parse(p.at) > weekAgo;
+        return (
+          <View key={id} style={{ flexDirection: "row", gap: 8 }}>
+            <Ionicons name={fresh ? "checkmark-circle" : "alert-circle-outline"} size={18} color={fresh ? t.good : t.warn} />
+            <View style={{ flex: 1 }}>
+              <Text style={{ color: t.text, textTransform: "capitalize" }}>{id}</Text>
+              <Text style={{ color: t.faint, fontSize: 13 }}>
+                {p ? `${fmtDay(p.at)} · ${p.proposed ?? 0} to review · ${p.summary ?? ""}` : "Hasn't run yet — check its setup, or add screenshots below instead."}
+              </Text>
+            </View>
+          </View>
+        );
+      })}
+    </Card>
   );
 }
 

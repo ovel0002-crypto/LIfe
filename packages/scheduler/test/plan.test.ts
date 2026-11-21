@@ -239,7 +239,11 @@ describe("partial progress & learning", () => {
     const t = task({ estimateMinutes: 90 });
     const after = recordProgress(t, { minutesSpent: 60, fractionDone: 0.5 });
     expect(after.status).toBe("doing");
-    expect(remainingMinutes(after)).toBe(60); // took 60 for half → ~60 more
+    // took 60 min for half of a 90-min estimate → between the estimate (45) and the pace (60)
+    expect(remainingMinutes(after)).toBe(53);
+    // Already 30% done before tracking: 30 tracked minutes + "about half" must not collapse to 30 min left.
+    const a2 = task({ estimateMinutes: 480, progress: 0.3 });
+    expect(remainingMinutes(recordProgress(a2, { minutesSpent: 30, fractionDone: 0.5 }))).toBe(240);
     const burned = recordProgress(t, { minutesSpent: 30 });
     expect(remainingMinutes(burned)).toBe(60);
     const done = recordProgress(t, { minutesSpent: 20, finished: true });

@@ -66,6 +66,7 @@ export const sourceLabel: Record<string, string> = {
   screenshot: "Screenshot",
   telegram: "Telegram",
   claude: "Claude",
+  browser: "Auto-pull",
   system: "Life",
 };
 

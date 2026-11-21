@@ -11,6 +11,8 @@ import { ChatAgent } from "./agent/chat";
 import { TriageAgent } from "./agent/triage";
 import { runTool, toolsFor, type ToolContext } from "./agent/tools";
 import { CheckIns, type CheckInResponse } from "./checkins";
+import { Collectors } from "./collectors";
+import { registerMcp } from "./mcp";
 import { config } from "./config";
 import { listFeeds, saveFeeds, syncFeed, type Feed } from "./connectors/ical";
 import * as google from "./connectors/google";
@@ -33,6 +35,7 @@ export interface Services {
   notifier: Notifier;
   review: WeeklyReview;
   memory: ReturnType<typeof createMemory>;
+  collectors: Collectors;
 }
 
 export function createServices(db: DB): Services {
@@ -41,6 +44,7 @@ export function createServices(db: DB): Services {
   const llm = new LLM(store);
   const memory = createMemory(store);
   const notifier = new Notifier(store);
+  const triage = new TriageAgent(store, planner, memory, llm);
   return {
     store,
     planner,
@@ -48,7 +52,8 @@ export function createServices(db: DB): Services {
     memory,
     notifier,
     chat: new ChatAgent(store, planner, memory, llm),
-    triage: new TriageAgent(store, planner, memory, llm),
+    triage,
+    collectors: new Collectors(store, triage, notifier),
     checkins: new CheckIns(store, planner, notifier),
     review: new WeeklyReview(store, planner),
   };
@@ -91,6 +96,22 @@ export async function buildApp(s: Services): Promise<FastifyInstance> {
 
   // ---------------- Tasks ----------------
   app.get("/api/tasks", async () => s.store.list("task"));
+  app.get("/api/tasks/:id", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const task = await s.store.get("task", id);
+    if (!task) return reply.code(404).send({ error: "not found" });
+    const all = await s.store.list("task");
+    const project = task.projectId ? await s.store.get("project", task.projectId) : undefined;
+    const plan = await s.planner.current();
+    return {
+      task,
+      project: project ?? null,
+      steps: all.filter((t) => t.parentId === id),
+      parent: task.parentId ? (all.find((t) => t.id === task.parentId) ?? null) : null,
+      blocks: plan.blocks.filter((b) => b.taskId === id),
+      why: plan.reasons[id] ?? null,
+    };
+  });
   app.post("/api/tasks", async (req) => {
     const body = req.body as Partial<Task>;
     const t: Task = {
@@ -268,6 +289,23 @@ export async function buildApp(s: Services): Promise<FastifyInstance> {
     return s.triage.process({ source: (b.source as never) ?? "you", title: b.text.slice(0, 80), body: b.text });
   });
 
+  /** Weekly browser runs (Claude in Chrome) paste what they read here via the /capture page. */
+  app.post("/api/capture/pull", async (req) => {
+    const b = z.object({ source: z.string().min(1).max(40), kind: z.enum(["messages", "roster", "page"]).default("messages"), text: z.string().min(1).max(60_000) }).parse(req.body);
+    const source = b.source.toLowerCase();
+    if (/LOGIN NEEDED/i.test(b.text) && b.text.length < 200) {
+      const todo = await s.collectors.loginNeeded(b.source[0].toUpperCase() + b.source.slice(1), undefined, source);
+      return { ok: true, summary: "Login needed — added a to-do", todo: todo.id, proposed: 0 };
+    }
+    const hint =
+      b.kind === "roster"
+        ? `The user's work roster from ${b.source}, collected by their weekly read-only browser run. Every shift is an event with lock 'hard', certainty 'confirmed', area 'work'. Lines marked OFFERED are open shifts: create an open question, not an event.`
+        : `Messages from the user's ${b.source}, collected by their weekly read-only browser run.`;
+    const r = await s.triage.process({ source: "browser", title: `${b.source} ${b.kind}`, body: b.text, hint });
+    await s.store.setKv(`pull:${source}`, { at: new Date().toISOString(), proposed: r.proposed, summary: r.summary });
+    return r;
+  });
+
   // ---------------- Weekly review ----------------
   app.get("/api/review", async () => s.review.data());
   app.post("/api/review/step", async (req) => {
@@ -324,6 +362,55 @@ export async function buildApp(s: Services): Promise<FastifyInstance> {
     return { ok: true, note: "Restart the server to (re)connect the bot." };
   });
 
+  // ---------------- Browser collectors (auto-pulls) ----------------
+  app.get("/api/collectors", async () =>
+    Promise.all((await s.collectors.list()).map(async (c) => ({ ...c, hasSession: await s.collectors.hasSession(c.id) }))),
+  );
+  app.post("/api/collectors", async (req) => {
+    const b = z
+      .object({
+        id: z.string().optional(),
+        name: z.string(),
+        startUrl: z.string().url(),
+        kind: z.enum(["roster", "messages", "page"]).default("roster"),
+        schedule: z.object({ weekday: z.number().int().min(1).max(7), hour: z.number().int().min(0).max(23) }).default({ weekday: 7, hour: 18 }),
+        loggedOutPattern: z.string().optional(),
+        waitFor: z.string().optional(),
+        hint: z.string().optional(),
+      })
+      .parse(req.body);
+    return s.collectors.save(b);
+  });
+  app.delete("/api/collectors/:id", async (req) => {
+    await s.collectors.remove((req.params as { id: string }).id);
+    return { ok: true };
+  });
+  /** Upload a saved login (from `pnpm --filter @life/server login-site <id>`). */
+  app.post("/api/collectors/:id/session", async (req) => {
+    const { id } = req.params as { id: string };
+    const b = z.object({ storageState: z.object({ cookies: z.array(z.unknown()) }).passthrough(), startUrl: z.string().url().optional() }).parse(req.body);
+    const c = (await s.collectors.list()).find((x) => x.id === id);
+    if (!c) return { ok: false, error: "No such collector" };
+    // If you navigated to the exact roster page while logging in, remember that page.
+    if (b.startUrl && new URL(b.startUrl).origin === new URL(c.startUrl).origin && !/login|signin|sso/i.test(b.startUrl)) {
+      await s.collectors.save({ ...c, startUrl: b.startUrl });
+    }
+    await s.collectors.saveSession(id, b.storageState);
+    return { ok: true };
+  });
+  app.post("/api/collectors/:id/run", async (req) => after(await s.collectors.run((req.params as { id: string }).id)));
+  /** What the automatic pulls captured, for the weekly review card. */
+  app.get("/api/pulls", async () => {
+    const ids = [...(await s.collectors.list()).map((c) => c.id), "instagram"];
+    const out: Record<string, unknown> = {};
+    for (const id of ids) out[id] = (await s.store.getKv(`pull:${id}`)) ?? null;
+    return { pulls: out, collectors: await s.collectors.list() };
+  });
+
+  // ---------------- MCP (Claude Desktop, claude.ai, claude -p) ----------------
+  await registerMcp(app, s);
+  app.get("/api/mcp/clients", async () => (await s.store.getKv("mcpClients")) ?? {});
+
   // ---------------- Usage / cost ----------------
   app.get("/api/usage", async () => ({ month: await s.llm.monthSpend(), budgetUsd: config.monthlyBudgetUsd }));
 
@@ -334,7 +421,7 @@ export async function buildApp(s: Services): Promise<FastifyInstance> {
     // wildcard + dotfiles: Expo's exported asset paths include pnpm's ".pnpm" directory.
     await app.register(fstatic, { root: appDir, wildcard: true, dotfiles: "allow" });
     app.setNotFoundHandler((req, reply) => {
-      if (/^\/(api|assets|_expo)\//.test(req.url)) return reply.code(404).send({ error: "not found" });
+      if (/^\/(api|assets|_expo|mcp)(\/|$)/.test(req.url)) return reply.code(404).send({ error: "not found" });
       return reply.sendFile("index.html");
     });
   }

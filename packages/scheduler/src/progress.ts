@@ -35,10 +35,18 @@ export function recordProgress(
   let progress: number;
   let remaining: number;
   if (typeof session.fractionDone === "number" && session.fractionDone > 0) {
-    // The user's own sense of progress beats the original estimate.
+    // The user's own sense of progress beats the original estimate for "how much is left".
     progress = clamp(session.fractionDone, 0.01, 0.99);
-    const impliedTotal = actual / progress;
-    remaining = Math.max(10, Math.round(impliedTotal - actual));
+    const fromEstimate = task.estimateMinutes * (1 - progress);
+    // Tracked time only predicts the total if it was tracked from the start of the task;
+    // otherwise (e.g. 30 tracked minutes on something already 30% done) trust the estimate.
+    const trackedFromStart = !task.progress && (task.actualMinutes ?? 0) === 0;
+    if (trackedFromStart) {
+      const fromPace = actual / progress - actual;
+      remaining = Math.max(10, Math.round((fromEstimate + fromPace) / 2));
+    } else {
+      remaining = Math.max(10, Math.round(fromEstimate));
+    }
   } else {
     // No fraction given: burn down the estimate, but never claim it's done.
     const base = task.remainingMinutes ?? task.estimateMinutes * (1 - (task.progress ?? 0));

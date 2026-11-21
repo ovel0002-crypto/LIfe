@@ -58,6 +58,7 @@ export function startJobs(s: Services) {
       if ("created" in r && (r.created || r.updated)) await s.planner.replan();
     }),
     every(60, "weekly-review", () => s.review.ensureEvent()),
+    every(30, "collectors", () => s.collectors.runDue()),
     every(1, "daily-nudges", () => dailyNudges(s)),
   ];
 

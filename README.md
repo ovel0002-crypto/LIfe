@@ -23,7 +23,11 @@ on your behalf.
 | `apps/server` | Fastify API on Postgres (or embedded PGlite for dev). Includes the review queue and undo, the chat and triage agents on the Claude API with a monthly spend cap, the connectors, notifications, the weekly review flow, and background jobs. |
 | `apps/app` | Expo Router app, built today as an installable PWA. The same code becomes a native iPhone app later. |
 | `infra` | `docker-compose.yml` with Postgres, Life, Caddy (HTTPS) and nightly backups. |
+| `apps/server/src/mcp.ts` | **Life MCP server** at `/mcp`. Claude Desktop, claude.ai and `claude -p` get the same tools as the in-app chat, plus `capture_messages` / `capture_page` for weekly browser runs. |
+| `apps/server/src/collectors` | **Auto-pulls.** The server reads logged-in pages (e.g. your Humanforce roster) weekly, read-only, with an encrypted saved login. |
+| `claude/scheduled` | Ready-to-paste prompts for weekly **Claude in Chrome** runs (Instagram DMs, roster fallback). |
 | `e2e/smoke.cjs` | Browser end-to-end check (iPhone viewport). |
+| `HUMAN_TODO.md` | What you need to do so development can continue. |
 
 ## Design rules
 
@@ -103,7 +107,9 @@ Moving to the homelab later: copy `infra/` with your `.env`, restore the latest 
 | **Notion** (team action items) | Create an integration at notion.so/my-integrations. A workspace owner may need to approve it. Share the action-items database with it and set `NOTION_TOKEN`. Then in Settings enter the database ID, your name, and the assignee and due property names. Items assigned to you become tasks linked back to Notion. Marking them done in Notion marks them done here. |
 | **Discord** (team server) | Create a bot at discord.com/developers, enable the **Message Content** intent, and set `DISCORD_BOT_TOKEN`. A server admin invites it. In Settings, list the channel IDs it may read, your user ID and your names. Mentions and asks are batched into one triage call every 30 minutes. DMs to the bot are quick capture. (Automating your own account breaks Discord's rules, so a bot is the only safe option.) |
 | **iMessage / Instagram / WhatsApp** | There's no API without a Mac. Use the **weekly admin hour**: it asks for screenshots of the chats that matter, and vision pulls out plans and promises for you to confirm. In between, just tell Life in chat. If the homelab becomes a Mac mini, a BlueBubbles / `chat.db` connector can be added. |
-| **Claude conversations** | Planned next: Life's tool layer exposed as a remote MCP connector for claude.ai. |
+| **Claude conversations** | Add Life as a custom connector: claude.ai → Customize → Connectors → **+ Add → Add custom connector**. Use the URL `https://LIFE_DOMAIN/mcp` and the request header `Authorization: Bearer <LIFE_API_TOKEN>`. If a setup only takes a URL, use `https://LIFE_DOMAIN/mcp/<LIFE_API_TOKEN>` and keep that URL private. It must be public HTTPS on port 443. Any Claude chat can then read and update your plan, and every change can be undone. |
+| **Work roster (Humanforce)** | First, check whether Humanforce has a calendar link; if it does, add it as a feed with the **Locked** lock. Otherwise, add an **Auto-pull** in Settings. Then, on your computer, run `LIFE_SERVER_URL=https://LIFE_DOMAIN LIFE_API_TOKEN=… pnpm --filter @life/server login-site humanforce`. This opens your Chrome; log in normally and press Enter. The session is stored encrypted with `LIFE_SECRET`. Life reads the page weekly and proposes your shifts as locked events. When the login expires, you get a "Log back into Humanforce" to-do. |
+| **Instagram DMs** | A weekly, read-only **Claude in Chrome** shortcut in your own Chrome. Follow `claude/scheduled/instagram-dms.md`. It hands results to Life through the connector, or through the `/capture` page. This breaks Instagram's terms; once a week and read-only keeps the risk low, but not zero. |
 | **Telegram** (reliable nudges + capture) | Create a bot with @BotFather and set `TELEGRAM_BOT_TOKEN`. Message it once, then set `TELEGRAM_CHAT_ID` (get it from `https://api.telegram.org/bot<TOKEN>/getUpdates`). Check-in buttons work from Telegram, and you can text it things like "dinner moved to 8". |
 
 ## Notifications
@@ -138,7 +144,15 @@ Life also always passes `max_tokens` on recall.
 - Claude API: ~$5–10. The cap is enforced. Haiku 5.5 handles triage, Sonnet 5.5 handles chat and planning, and the system prompt is cached. Noise is filtered before any AI call.
 - Apple Developer: $8/month equivalent, only once you go native.
 
-`LIFE_LLM_PROVIDER=claude-cli` uses `claude -p` signed into your Claude plan for text-only jobs. That counts against your subscription limits rather than API credit.
+**Running on your Claude plan instead of API credit:**
+- Set `LIFE_LLM_PROVIDER=claude-cli` and run `docker compose exec life claude login` once.
+- Chat, triage, vision and breakdown then run through `claude -p`, with Life's MCP server as the only tools. Each run gets a short-lived scoped token, so triage can only *propose* changes.
+- This uses your Pro limits and costs nothing extra.
+
+**Testing the Claude parts:** `LIFE_LLM_PROVIDER=claude-cli pnpm --filter @life/server scenarios`. It runs 10 live scenarios and checks the database outcomes:
+- chat: focus, plan change, partial progress, sick day, breakdown, undo
+- email triage, including the noise filter
+- roster and Instagram screenshots
 
 ## Going native later
 
@@ -152,7 +166,7 @@ Set `EXPO_PUBLIC_API_URL` to your server for the native build. Next on that path
 
 ## Roadmap
 
-- MCP server so claude.ai can read and update your plan, plus import of your Claude data export
+- Import of your Claude data export
 - Drag-to-reorder (currently a reorder mode with ↑/↓)
 - Passkey login (currently a single bearer token)
 - Native iOS build with widgets

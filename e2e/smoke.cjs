@@ -49,8 +49,32 @@ const assert = (c, m) => { if (!c) { throw new Error("FAIL: " + m); } console.lo
     await page.getByText("Normal").first().click();
     await page.waitForTimeout(500);
 
+    // Task detail sheet from the action sheet.
+    await page.goto(base + "/", { waitUntil: "networkidle" });
+    await page.getByText(today.should[0]?.title ?? target.title).first().click();
+    await page.getByText("Details & steps").click();
+    await page.waitForURL(/\/task\//);
+    await page.getByText("left of").first().waitFor({ timeout: 5000 });
+    assert(true, "task detail sheet opens with time left");
+    if (process.env.SHOTS) await page.screenshot({ path: process.env.SHOTS + "/task.png" });
+
+    // Capture page used by weekly Claude in Chrome runs (needs an AI engine on the server).
+    if (process.env.E2E_AI === "1") {
+      await page.goto(base + "/capture?source=instagram", { waitUntil: "networkidle" });
+      await page.getByLabel("Captured text").fill("[Mia] (Sun 2:10pm) trivia at the Nott this thursday 7pm? we need a 6th\n[Mia] (Sun 2:11pm) lmk by wed");
+      await page.getByText("Send to Life", { exact: true }).last().click();
+      await page.getByTestId("capture-result").waitFor({ timeout: 240000 });
+      const msg = await page.getByTestId("capture-result").innerText();
+      assert(/^Sent/.test(msg), "capture page sends to Life: " + msg.slice(0, 160));
+      if (process.env.SHOTS) await page.screenshot({ path: process.env.SHOTS + "/capture.png" });
+      const pulls = await (await page.request.get(base + "/api/pulls")).json();
+      assert(pulls.pulls.instagram && pulls.pulls.instagram.at, "pull recorded for the weekly review card");
+    }
+
     await page.goto(base + "/review", { waitUntil: "networkidle" });
     assert(await page.getByText("Screenshots").first().isVisible(), "weekly review opens");
+    if (process.env.E2E_AI === "1") assert(await page.getByText("This week's automatic pulls").isVisible(), "pulls card shows in the weekly review");
+    if (process.env.SHOTS) await page.screenshot({ path: process.env.SHOTS + "/review.png" });
     assert(errors.length === 0, "no page errors " + JSON.stringify(errors));
   } finally {
     await browser.close();

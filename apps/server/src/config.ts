@@ -5,6 +5,12 @@ export const config = {
   /** Postgres URL. Unset = embedded PGlite in ./data (zero-setup dev). */
   databaseUrl: process.env.DATABASE_URL,
   dataDir: process.env.LIFE_DATA_DIR ?? "./data",
+  /** Encrypts saved browser sessions at rest. */
+  secret: process.env.LIFE_SECRET ?? "",
+  /** Chromium for server browser collectors (defaults to Playwright's own). */
+  chromiumPath: process.env.LIFE_CHROMIUM_PATH,
+  /** Base URL the server's own `claude -p` runs use to reach /mcp. */
+  selfUrl: process.env.LIFE_SELF_URL,
   /** Single-user bearer token for the API. Unset = no auth (local dev only). */
   apiToken: process.env.LIFE_API_TOKEN,
   /** Hard monthly cap for LLM spend in USD. */

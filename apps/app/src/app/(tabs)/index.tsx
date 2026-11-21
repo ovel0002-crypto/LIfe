@@ -113,6 +113,7 @@ export default function TodayScreen() {
     i.kind !== "task"
       ? [{ label: "Tell Life about this", icon: "chatbubble-outline", onPress: () => setPrefill(`About "${i.title}": `) }]
       : [
+          { label: "Details & steps", icon: "document-text-outline", onPress: () => router.push(`/task/${i.taskId}`) },
           { label: "Done", icon: "checkmark-circle-outline", onPress: () => done(i) },
           { label: "Did some — about half", icon: "pie-chart-outline", onPress: () => progress(i, { minutesSpent: Math.round((i.minutes ?? 60) / 2), fractionDone: 0.5 }) },
           { label: "Did 30 minutes", icon: "time-outline", onPress: () => progress(i, { minutesSpent: 30 }) },

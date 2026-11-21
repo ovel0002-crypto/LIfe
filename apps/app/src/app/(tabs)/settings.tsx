@@ -170,6 +170,8 @@ export default function SettingsScreen() {
         </View>
       </Card>
 
+      <AutoPulls say={say} />
+
       <SectionHeader title="Team: Notion" hint="Action items assigned to you become tasks" />
       <Card style={{ gap: space.md }}>
         <Status ok={!!c?.notion} label={c?.notion ? "Connected" : "Not set up (needs NOTION_TOKEN on the server)"} />
@@ -258,6 +260,70 @@ export default function SettingsScreen() {
         ))}
       </Card>
     </Screen>
+  );
+}
+
+interface CollectorRow {
+  id: string;
+  name: string;
+  startUrl: string;
+  schedule: { weekday: number; hour: number };
+  hasSession: boolean;
+  lastRun?: string;
+  lastResult?: string;
+}
+
+const DAYS = ["", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+/** Server browser collectors (e.g. Humanforce roster) + where to find the Instagram set-up. */
+function AutoPulls({ say }: { say: (m: string) => void }) {
+  const t = useTheme();
+  const { data } = useApi<CollectorRow[]>("/api/collectors");
+  const [form, setForm] = useState({ name: "Humanforce", startUrl: "", weekday: 7, hour: 18 });
+  const [busy, setBusy] = useState<string | null>(null);
+
+  const add = async () => {
+    await act(() => post("/api/collectors", { name: form.name, startUrl: form.startUrl, kind: "roster", schedule: { weekday: form.weekday, hour: form.hour } }));
+    say(`Added. Now save your login: on your PC run  pnpm --filter @life/server login-site ${form.name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`);
+    setForm({ ...form, startUrl: "" });
+  };
+  const run = async (id: string) => {
+    setBusy(id);
+    const r = await act(() => post<{ status: string; summary?: string }>(`/api/collectors/${id}/run`));
+    setBusy(null);
+    say(`${r.status}${r.summary ? `: ${r.summary}` : ""}`);
+  };
+
+  return (
+    <>
+      <SectionHeader title="Auto-pulls" hint="Logged-in pages Life reads weekly (read-only)" />
+      <Card style={{ gap: space.md }}>
+        {(data ?? []).map((c) => (
+          <View key={c.id} style={{ gap: 4, paddingBottom: 8, borderBottomWidth: 1, borderBottomColor: t.line }}>
+            <Status ok={c.hasSession && !c.lastResult?.startsWith("login")} label={`${c.name} · ${DAYS[c.schedule.weekday]} ${c.schedule.hour}:00`} />
+            <Text style={{ color: t.faint, fontSize: 13 }}>{c.hasSession ? c.lastResult ?? "Not run yet" : `No saved login — run: pnpm --filter @life/server login-site ${c.id}`}</Text>
+            <View style={{ flexDirection: "row", gap: 8 }}>
+              <Button label="Run now" small kind="secondary" loading={busy === c.id} onPress={() => run(c.id)} />
+              <Button label="Remove" small kind="ghost" onPress={() => act(() => api(`/api/collectors/${c.id}`, { method: "DELETE" }))} />
+            </View>
+          </View>
+        ))}
+        <Text style={{ color: t.sub, fontSize: 13 }}>
+          Roster: first check whether Humanforce has a calendar link — if it does, add it above as a locked calendar feed instead. Otherwise add the roster page here.
+        </Text>
+        <Field label="Name" value={form.name} onChange={(v) => setForm({ ...form, name: v })} />
+        <Field label="Roster page URL" value={form.startUrl} onChange={(v) => setForm({ ...form, startUrl: v })} placeholder="https://yourworkplace.humanforce.com/…" />
+        <View style={{ flexDirection: "row", gap: 6, flexWrap: "wrap" }}>
+          {DAYS.slice(1).map((d, i) => (
+            <Chip key={d} label={d} active={form.weekday === i + 1} onPress={() => setForm({ ...form, weekday: i + 1 })} />
+          ))}
+        </View>
+        <View style={{ flexDirection: "row" }}>
+          <Button label="Add auto-pull" small onPress={add} disabled={!form.startUrl} />
+        </View>
+        <Text style={{ color: t.faint, fontSize: 13 }}>Instagram runs in your own Chrome via Claude in Chrome — see claude/scheduled/instagram-dms.md in the repo.</Text>
+      </Card>
+    </>
   );
 }
 

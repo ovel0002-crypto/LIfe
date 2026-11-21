@@ -1,12 +1,10 @@
-import type Anthropic from "@anthropic-ai/sdk";
 import { DateTime } from "luxon";
 import { newId } from "@life/core";
 import type { LLM } from "../llm/provider";
-import { textOf } from "../llm/provider";
+import { runAgent } from "../llm/agent";
 import type { MemoryStore } from "../memory";
 import type { Planner } from "../planner";
 import type { Store } from "../store";
-import { anthropicTools, runTool, toolsFor, type ToolContext } from "./tools";
 
 /**
  * Frozen system prompt: never interpolate dates or data into this string (it would break
@@ -67,79 +65,27 @@ export class ChatAgent {
 
   async send(userText: string, opts: { images?: { mediaType: string; data: string }[] } = {}): Promise<ChatResult> {
     const batchId = newId("turn_");
-    const history = await this.store.recentChat(12);
+    const history = (await this.store.recentChat(12)).map((m) => ({ role: (m.role === "assistant" ? "assistant" : "user") as "user" | "assistant", text: m.text }));
     await this.store.addChat("user", userText);
-
-    const messages: Anthropic.Beta.BetaMessageParam[] = [];
-    for (const m of history) {
-      const role = m.role === "assistant" ? "assistant" : "user";
-      const last = messages[messages.length - 1];
-      // Merge consecutive same-role messages to keep strict alternation.
-      if (last && last.role === role && typeof last.content === "string") last.content += `\n\n${m.text}`;
-      else messages.push({ role, content: m.text });
-    }
-    if (messages[0]?.role === "assistant") messages.shift();
-
-    const content: Anthropic.Beta.BetaContentBlockParam[] = [
-      ...(opts.images ?? []).map(
-        (img) =>
-          ({
-            type: "image",
-            source: { type: "base64", media_type: img.mediaType as "image/png", data: img.data },
-          }) as Anthropic.Beta.BetaImageBlockParam,
-      ),
-      { type: "text", text: `<context>\n${await this.contextBlock()}\n</context>\n\n${userText}` },
-    ];
-    const lastMsg = messages[messages.length - 1];
-    if (lastMsg?.role === "user") {
-      lastMsg.content = [{ type: "text", text: String(lastMsg.content) }, ...content];
-    } else messages.push({ role: "user", content });
-
-    const list = toolsFor();
-    const ctx: ToolContext = {
-      store: this.store,
-      planner: this.planner,
-      memory: this.memory,
-      batchId,
-      actor: "assistant",
-      propose: false,
-      source: "chat",
-      mutated: false,
-    };
-
-    let reply = "";
-    for (let i = 0; i < 10; i++) {
-      const res = await this.llm.create({
+    const r = await runAgent(
+      { store: this.store, planner: this.planner, memory: this.memory, llm: this.llm },
+      {
         purpose: "chat",
         tier: "smart",
         system: ASSISTANT_SYSTEM,
-        messages,
-        tools: anthropicTools(list),
-        maxTokens: 8000,
+        history,
+        prompt: `<context>\n${await this.contextBlock()}\n</context>\n\n${userText}`,
+        images: opts.images,
+        propose: false,
+        source: "chat",
+        actor: "assistant",
+        batchId,
         effort: "medium",
-      });
-      if (res.stop_reason === "refusal") {
-        reply = "I can't help with that one.";
-        break;
-      }
-      messages.push({ role: "assistant", content: res.content as Anthropic.Beta.BetaContentBlockParam[] });
-      const uses = res.content.filter((b): b is Anthropic.Beta.BetaToolUseBlock => b.type === "tool_use");
-      if (res.stop_reason !== "tool_use" || uses.length === 0) {
-        reply = textOf(res);
-        break;
-      }
-      // Run all tool calls, return all results in one user message.
-      const results: Anthropic.Beta.BetaToolResultBlockParam[] = [];
-      for (const u of uses) {
-        const r = await runTool(list, u.name, u.input, ctx);
-        results.push({ type: "tool_result", tool_use_id: u.id, content: r.content, is_error: r.isError || undefined });
-      }
-      messages.push({ role: "user", content: results });
-    }
-
-    if (ctx.mutated) await this.planner.replan({ reason: "chat" });
-    if (!reply) reply = ctx.mutated ? "Done — I've updated your plan." : "Okay.";
-    await this.store.addChat("assistant", reply, ctx.mutated ? batchId : undefined);
-    return { reply, batchId, changed: ctx.mutated };
+      },
+    );
+    if (r.mutated) await this.planner.replan({ reason: "chat" });
+    const reply = r.text || (r.mutated ? "Done — I've updated your plan." : "Okay.");
+    await this.store.addChat("assistant", reply, r.mutated ? batchId : undefined);
+    return { reply, batchId, changed: r.mutated };
   }
 }

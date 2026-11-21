@@ -37,6 +37,7 @@ export type Source =
   | "screenshot"
   | "telegram"
   | "claude"
+  | "browser"
   | "system";
 
 export type TaskStatus = "todo" | "doing" | "waiting" | "done" | "dropped";

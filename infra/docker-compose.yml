@@ -26,6 +26,9 @@ services:
         condition: service_healthy
     expose:
       - "8787"
+    volumes:
+      # Keeps the `claude login` (for LIFE_LLM_PROVIDER=claude-cli) across restarts.
+      - claude:/root/.claude
 
   # HTTPS with automatic certificates (required for iOS home-screen push).
   caddy:
@@ -55,5 +58,6 @@ services:
 volumes:
   pgdata:
   caddy:
+  claude:
 # Memory (optional): run Eunomia's own compose stack next to this one (see README → Memory),
 # then set EUNOMIA_URL and EUNOMIA_TOKEN in .env.
