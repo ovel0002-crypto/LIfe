@@ -28,8 +28,8 @@ RULES — follow exactly:
 - If Instagram shows a login page, a "suspicious activity"/checkpoint/captcha, or asks to confirm it's me: STOP. Go to step 4 and write only "LOGIN NEEDED: instagram".
 
 STEPS
-1. Go to https://www.instagram.com/direct/inbox/ (also check the "Requests" tab, but don't accept anything).
-2. Open each conversation with messages from the last 7 days.
+1. Go to https://www.instagram.com/direct/inbox/. The list on the left shows each chat with "N new messages" or the last message and how long ago (e.g. "28m", "8h", "3d"). Group chats show their name (e.g. a birthday or event chat).
+2. Open each chat that has new messages or activity in the last 7 days (newest first, at most 25). Scroll up inside a chat only far enough to cover the last 7 days. Glance at the "Requests" tab too, but never accept anything.
 3. Note only what matters for my plans: invitations and plans (who, what, when, where), questions someone asked me, things I said I'd do, changes or cancellations, dates and deadlines. Skip memes, reels and small talk. Keep dates/times exactly as shown, with sender first names.
 4. Hand it to Life:
    - If you have the Life connector, call its capture_messages tool once with source "instagram" and the messages.

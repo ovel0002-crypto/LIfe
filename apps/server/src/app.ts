@@ -13,6 +13,8 @@ import { runTool, toolsFor, type ToolContext } from "./agent/tools";
 import { CheckIns, type CheckInResponse } from "./checkins";
 import { Collectors } from "./collectors";
 import { registerMcp } from "./mcp";
+import { Onboarding, ONBOARDING_STEPS } from "./onboarding";
+import { registerTamarin, TamarinInbox } from "./connectors/tamarin";
 import { config } from "./config";
 import { listFeeds, saveFeeds, syncFeed, type Feed } from "./connectors/ical";
 import * as google from "./connectors/google";
@@ -36,6 +38,8 @@ export interface Services {
   review: WeeklyReview;
   memory: ReturnType<typeof createMemory>;
   collectors: Collectors;
+  tamarin: TamarinInbox;
+  onboarding: Onboarding;
 }
 
 export function createServices(db: DB): Services {
@@ -45,6 +49,7 @@ export function createServices(db: DB): Services {
   const memory = createMemory(store);
   const notifier = new Notifier(store);
   const triage = new TriageAgent(store, planner, memory, llm);
+  const collectors = new Collectors(store, triage, notifier);
   return {
     store,
     planner,
@@ -53,7 +58,9 @@ export function createServices(db: DB): Services {
     notifier,
     chat: new ChatAgent(store, planner, memory, llm),
     triage,
-    collectors: new Collectors(store, triage, notifier),
+    collectors,
+    onboarding: new Onboarding(store, planner, memory, collectors),
+    tamarin: new TamarinInbox(store, triage),
     checkins: new CheckIns(store, planner, notifier),
     review: new WeeklyReview(store, planner),
   };
@@ -67,7 +74,8 @@ export async function buildApp(s: Services): Promise<FastifyInstance> {
   // Single-user bearer auth.
   app.addHook("onRequest", async (req, reply) => {
     if (!config.apiToken || !req.url.startsWith("/api/")) return;
-    if (req.url.startsWith("/api/health") || req.url.startsWith("/api/connect/google/callback")) return;
+    // Health, OAuth callback and the Tamarin webhook (HMAC-signed) don't use the bearer token.
+    if (req.url.startsWith("/api/health") || req.url.startsWith("/api/connect/google/callback") || req.url.startsWith("/api/hooks/")) return;
     const header = req.headers.authorization?.replace(/^Bearer\s+/i, "");
     const q = (req.query as Record<string, string> | undefined)?.token;
     if (header !== config.apiToken && q !== config.apiToken) return reply.code(401).send({ error: "unauthorized" });
@@ -291,14 +299,16 @@ export async function buildApp(s: Services): Promise<FastifyInstance> {
 
   /** Weekly browser runs (Claude in Chrome) paste what they read here via the /capture page. */
   app.post("/api/capture/pull", async (req) => {
-    const b = z.object({ source: z.string().min(1).max(40), kind: z.enum(["messages", "roster", "page"]).default("messages"), text: z.string().min(1).max(60_000) }).parse(req.body);
+    const b = z.object({ source: z.string().min(1).max(40), kind: z.enum(["messages", "roster", "page", "deadlines"]).default("messages"), text: z.string().min(1).max(60_000) }).parse(req.body);
     const source = b.source.toLowerCase();
     if (/LOGIN NEEDED/i.test(b.text) && b.text.length < 200) {
       const todo = await s.collectors.loginNeeded(b.source[0].toUpperCase() + b.source.slice(1), undefined, source);
       return { ok: true, summary: "Login needed — added a to-do", todo: todo.id, proposed: 0 };
     }
     const hint =
-      b.kind === "roster"
+      b.kind === "deadlines"
+        ? `Upcoming uni deadlines read from the user's Moodle (Monash) by their browser run. For EACH line: find an existing uni task for that assessment with list_tasks (match by unit code + title); if found, update its due date if it changed; otherwise add_task (area "uni", title "Do <quiz>" / "Finish <assignment>" / "Revise for <exam>", due exactly as shown in the user's timezone, estimate quizzes 45, assignments 360, exams 480 unless the weighting suggests otherwise, sourceUrl = the link). Don't create events for these.`
+        : b.kind === "roster"
         ? `The user's work roster from ${b.source}, collected by their weekly read-only browser run. Every shift is an event with lock 'hard', certainty 'confirmed', area 'work'. Lines marked OFFERED are open shifts: create an open question, not an event.`
         : `Messages from the user's ${b.source}, collected by their weekly read-only browser run.`;
     const r = await s.triage.process({ source: "browser", title: `${b.source} ${b.kind}`, body: b.text, hint });
@@ -327,13 +337,35 @@ export async function buildApp(s: Services): Promise<FastifyInstance> {
   }));
   app.post("/api/connectors/feeds", async (req) => {
     const b = z
-      .object({ name: z.string(), url: z.string().url(), kind: z.enum(["moodle", "timetable", "calendar"]), lock: z.enum(["hard", "soft", "flexible"]).default("soft") })
+      .object({ name: z.string(), url: z.string().url(), kind: z.enum(["moodle", "timetable", "calendar", "roster"]), lock: z.enum(["hard", "soft", "flexible"]).default("soft") })
       .parse(req.body);
     const feeds = await listFeeds(s.store);
     const feed: Feed = { id: newId("feed_"), ...b };
     feeds.push(feed);
     await saveFeeds(s.store, feeds);
     const result = await syncFeed(s.store, feed).catch((e) => ({ error: (e as Error).message }));
+    return after({ feed, result });
+  });
+  /** Upload a calendar file you downloaded (e.g. Humanforce "Roster download"). Re-uploading updates it. */
+  app.post("/api/import/ics", async (req) => {
+    let text = "";
+    let kind: Feed["kind"] = "roster";
+    let name = "Roster";
+    for await (const part of req.parts()) {
+      if (part.type === "file") text = (await part.toBuffer()).toString("utf8");
+      else if (part.fieldname === "kind") kind = String(part.value) as Feed["kind"];
+      else if (part.fieldname === "name") name = String(part.value);
+    }
+    if (!text.includes("BEGIN:VCALENDAR")) return { error: "That doesn't look like a calendar (.ics) file" };
+    const feeds = await listFeeds(s.store);
+    let feed = feeds.find((f) => f.url === `upload:${name}`);
+    if (!feed) {
+      feed = { id: newId("feed_"), name, url: `upload:${name}`, kind, lock: kind === "roster" ? "hard" : "soft" };
+      feeds.push(feed);
+    }
+    const result = await syncFeed(s.store, feed, { text });
+    feed.lastSync = new Date().toISOString();
+    await saveFeeds(s.store, feeds);
     return after({ feed, result });
   });
   app.delete("/api/connectors/feeds/:id", async (req) => {
@@ -364,8 +396,18 @@ export async function buildApp(s: Services): Promise<FastifyInstance> {
 
   // ---------------- Browser collectors (auto-pulls) ----------------
   app.get("/api/collectors", async () =>
-    Promise.all((await s.collectors.list()).map(async (c) => ({ ...c, hasSession: await s.collectors.hasSession(c.id) }))),
+    Promise.all(
+      (await s.collectors.list()).map(async (c) => ({ ...c, hasSession: await s.collectors.hasSession(c.id), hasCredentials: await s.collectors.hasCredentials(c.id) })),
+    ),
   );
+  /** Save a username/password for a collector (encrypted at rest; never returned). */
+  app.post("/api/collectors/:id/credentials", async (req) => {
+    const { id } = req.params as { id: string };
+    const b = z.object({ username: z.string().min(1), password: z.string().min(1) }).parse(req.body);
+    if (!(await s.collectors.list()).some((c) => c.id === id)) return { ok: false, error: "No such collector" };
+    await s.collectors.saveCredentials(id, b);
+    return { ok: true };
+  });
   app.post("/api/collectors", async (req) => {
     const b = z
       .object({
@@ -377,6 +419,7 @@ export async function buildApp(s: Services): Promise<FastifyInstance> {
         loggedOutPattern: z.string().optional(),
         waitFor: z.string().optional(),
         hint: z.string().optional(),
+        download: z.boolean().optional(),
       })
       .parse(req.body);
     return s.collectors.save(b);
@@ -406,6 +449,50 @@ export async function buildApp(s: Services): Promise<FastifyInstance> {
     for (const id of ids) out[id] = (await s.store.getKv(`pull:${id}`)) ?? null;
     return { pulls: out, collectors: await s.collectors.list() };
   });
+
+  // ---------------- Onboarding ("Set up Life / Tune Life") & About me ----------------
+  app.get("/api/onboarding", async () => ({
+    state: await s.onboarding.state(),
+    steps: ONBOARDING_STEPS,
+    sources: await s.onboarding.sources(),
+    inferences: await s.onboarding.inferences(),
+    banner: await s.onboarding.banner(),
+  }));
+  app.post("/api/onboarding/step", async (req) => {
+    const b = z.object({ step: z.enum(ONBOARDING_STEPS), outcome: z.enum(["done", "skipped"]) }).parse(req.body);
+    return s.onboarding.markStep(b.step, b.outcome);
+  });
+  app.post("/api/onboarding/verdict", async (req) => {
+    const b = z
+      .object({ id: z.string(), verdict: z.enum(["confirmed", "dismissed", "edited"]), edit: z.object({ text: z.string().optional(), dayStart: z.string().optional(), dayEnd: z.string().optional() }).optional() })
+      .parse(req.body);
+    return s.onboarding.verdict(b.id, b.verdict, b.edit);
+  });
+  app.post("/api/onboarding/overdue", async (req) => {
+    const b = z.object({ taskId: z.string(), action: z.enum(["keep", "done", "drop"]), due: z.string().optional() }).parse(req.body);
+    return s.onboarding.decideOverdue(b.taskId, b.action, b.due);
+  });
+  app.post("/api/onboarding/restart", async () => (await s.onboarding.restart(), { ok: true }));
+  app.post("/api/onboarding/retune/dismiss", async () => (await s.onboarding.dismissRetune(), { ok: true }));
+  /** Everything Life believes about you (built-in memory; with Eunomia, a recall about "me"). */
+  app.get("/api/memory", async () => {
+    if (config.eunomia.url) return { source: "eunomia", items: (await s.memory.recall("me my profile preferences projects people", { limit: 40 })).map((m, i) => ({ id: `e${i}`, ...m })) };
+    const items = (await s.store.list("memory")).sort((a, b) => b.at.localeCompare(a.at));
+    return { source: "local", items };
+  });
+  app.delete("/api/memory/:id", async (req) => {
+    const { id } = req.params as { id: string };
+    const c = await s.store.remove("memory", id, { actor: "you", reason: "Forgot" });
+    return { ok: Boolean(c) };
+  });
+  app.post("/api/memory", async (req) => {
+    const b = z.object({ subject: z.string().default("Me"), kind: z.string().default("profile"), text: z.string().min(1) }).parse(req.body);
+    await s.memory.remember({ ...b, type: "observation" });
+    return { ok: true };
+  });
+
+  // ---------------- Tamarin (team Discord bot) webhooks ----------------
+  await registerTamarin(app, s.tamarin, () => config.tamarinSecret);
 
   // ---------------- MCP (Claude Desktop, claude.ai, claude -p) ----------------
   await registerMcp(app, s);

@@ -59,6 +59,7 @@ export function startJobs(s: Services) {
     }),
     every(60, "weekly-review", () => s.review.ensureEvent()),
     every(30, "collectors", () => s.collectors.runDue()),
+    every(30, "tamarin-digest", () => s.tamarin.flush()),
     every(1, "daily-nudges", () => dailyNudges(s)),
   ];
 

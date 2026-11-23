@@ -22,6 +22,8 @@ export default function RootLayout() {
         <Stack.Screen name="closeout" options={{ presentation: "modal" }} />
         <Stack.Screen name="task/[id]" options={{ presentation: "modal" }} />
         <Stack.Screen name="capture" />
+        <Stack.Screen name="onboarding" options={{ presentation: "modal" }} />
+        <Stack.Screen name="about" options={{ presentation: "modal" }} />
       </Stack>
     </SafeAreaProvider>
   );

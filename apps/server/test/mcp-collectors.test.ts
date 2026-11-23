@@ -1,3 +1,5 @@
+import { createHmac } from "node:crypto";
+import { readFileSync } from "node:fs";
 import Fastify from "fastify";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -146,4 +148,79 @@ describe("browser collector (real Chromium, local pages)", () => {
     await c.saveSession("hf2", { cookies: [], origins: [] });
     expect((await s.store.get("task", todo!.id))!.status).toBe("done");
   }, 60_000);
+});
+
+describe("Humanforce-style auto-login + roster download", () => {
+  let site: FastifyInstance;
+  let siteBase: string;
+  const ics = readFileSync(new URL("./fixtures/humanforce-roster.ics", import.meta.url), "utf8");
+  beforeAll(async () => {
+    site = Fastify();
+    await site.register(import("@fastify/formbody"));
+    site.get("/Account/Login", async (_req, reply) =>
+      reply.type("text/html").send('<meta charset="utf-8"><form method="post" action="/Account/Login"><input name="UserName" type="text"><input name="Password" type="password"><button type="submit">Log in</button></form>'),
+    );
+    site.post("/Account/Login", async (req, reply) => {
+      const b = req.body as { UserName?: string; Password?: string };
+      if (b.UserName === "oscar" && b.Password === "right-pass") return reply.header("set-cookie", "hf=ok; Path=/").redirect("/Roster");
+      return reply.redirect("/Account/Login?error=1");
+    });
+    site.get("/Roster", async (req, reply) => {
+      if (!(req.headers.cookie ?? "").includes("hf=ok")) return reply.redirect("/Account/Login");
+      return reply.type("text/html").send('<meta charset="utf-8"><h1>My Roster</h1><a href="/Roster/Download">Roster download</a>');
+    });
+    site.get("/Roster/Download", async (req, reply) => {
+      if (!(req.headers.cookie ?? "").includes("hf=ok")) return reply.code(401).send();
+      return reply.header("content-type", "text/calendar").header("content-disposition", 'attachment; filename="Roster.ics"').send(ics);
+    });
+    await site.listen({ port: 0, host: "127.0.0.1" });
+    siteBase = `http://127.0.0.1:${(site.server.address() as { port: number }).port}`;
+    await s.store.setPrefs({ timezone: "Australia/Melbourne" }, { actor: "system" });
+  });
+  afterAll(() => site.close());
+
+  it("logs in with the stored password, downloads the roster file and imports shifts (no AI)", async () => {
+    const triageCalls: unknown[] = [];
+    const c = new Collectors(s.store, { process: async (i: unknown) => (triageCalls.push(i), { summary: "", proposed: 0 }) } as never, s.notifier);
+    await c.save({ id: "luna", name: "Humanforce", startUrl: `${siteBase}/Roster`, kind: "roster", download: true, schedule: { weekday: 7, hour: 18 } });
+    await c.saveCredentials("luna", { username: "oscar", password: "right-pass" });
+    const r = await c.run("luna");
+    expect(r.status).toBe("imported");
+    expect(triageCalls).toHaveLength(0);
+    const shifts = (await s.store.list("event")).filter((e) => e.externalId?.startsWith("luna:"));
+    expect(shifts.length).toBeGreaterThan(3);
+    expect(shifts.every((e) => e.lock === "hard" && e.area === "work")).toBe(true);
+    // The stored password is never kept in plain text.
+    expect(JSON.stringify(await s.store.getKv("cred:luna"))).not.toContain("right-pass");
+  }, 90_000);
+
+  it("a wrong password becomes a 'check your password' to-do", async () => {
+    const c = new Collectors(s.store, { process: async () => ({ summary: "", proposed: 0 }) } as never, s.notifier);
+    await c.save({ id: "luna2", name: "Humanforce", startUrl: `${siteBase}/Roster`, kind: "roster", download: true, schedule: { weekday: 7, hour: 18 } });
+    await c.saveCredentials("luna2", { username: "oscar", password: "wrong" });
+    const r = await c.run("luna2");
+    expect(r.status).toBe("bad-password");
+    const todo = (await s.store.list("task")).find((t) => t.notes?.includes("[login:luna2]"));
+    expect(todo?.title).toBe("Check your Humanforce password in Life");
+  }, 90_000);
+});
+
+describe("Tamarin webhook", () => {
+  const sign = (body: string, secret: string) => `sha256=${createHmac("sha256", secret).update(body).digest("hex")}`;
+  it("verifies the signature and keeps only messages relevant to you", async () => {
+    (config as { tamarinSecret?: string }).tamarinSecret = "whsec";
+    await s.store.setKv("discord", { channels: ["c1"], myUserId: "42", myNames: ["oscar"], digestMinutes: 30 });
+    const post = (payload: object, sig?: string) => {
+      const body = JSON.stringify(payload);
+      return fetch(`${base}/api/hooks/tamarin`, { method: "POST", headers: { "content-type": "application/json", "x-signature": sig ?? sign(body, "whsec"), "x-webhook-event": "message" }, body });
+    };
+    const msg = (content: string, extra: object = {}) => ({ event: "message", message_id: "m", channel_id: "c1", author: { id: "7", username: "alex" }, content, ...extra });
+    expect((await post(msg("hi"), "sha256=deadbeef")).status).toBe(401);
+    expect(await (await post(msg("lol nice"))).json()).toMatchObject({ result: "ignored" });
+    expect(await (await post(msg("<@42> can you finish the conveyor CAD by Friday?"))).json()).toMatchObject({ result: "kept" });
+    expect(await (await post(msg("oscar we need the governance docs read"))).json()).toMatchObject({ result: "kept" });
+    expect(await (await post(msg("sounds good", { reference_author_id: "42" }))).json()).toMatchObject({ result: "kept" });
+    expect(await (await post({ ...msg("<@42> hey"), channel_id: "other" })).json()).toMatchObject({ result: "ignored" });
+    expect(s.tamarin.pending()).toBe(3);
+  });
 });

@@ -38,6 +38,7 @@ export class CheckIns {
     // Ask about a block that started in the last 3 minutes.
     const starting = plan.blocks.find((b) => ms(b.start) <= nowMs && nowMs - ms(b.start) < 3 * 60_000);
     if (!starting) return;
+    if (prefs.checkinStyle === "quiet") return;
     const verdict = shouldCheckIn(now.toISOString(), history, prefs, starting.id);
     if (!verdict.ok) return;
     const task = await this.store.get("task", starting.taskId);
@@ -46,7 +47,10 @@ export class CheckIns {
     await this.store.create("checkin", c, { actor: "system" });
     await this.notifier.send({
       title: `Time for: ${task.title}`,
-      body: `${fmtMins((ms(starting.end) - ms(starting.start)) / 60_000)} block. On it?`,
+      body:
+        prefs.checkinStyle === "direct"
+          ? `${fmtMins((ms(starting.end) - ms(starting.start)) / 60_000)} starts now. Go.`
+          : `${fmtMins((ms(starting.end) - ms(starting.start)) / 60_000)} block. On it?`,
       url: "/",
       tag: starting.id,
       actions: [

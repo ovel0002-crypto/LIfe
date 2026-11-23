@@ -27,6 +27,7 @@ export default function TodayScreen() {
   const t = useTheme();
   const { data, error, reload } = useApi<Today>("/api/today", { refreshMs: 60_000 });
   const { data: plan } = useApi<{ days: { date: string; mode: DayMode }[] }>("/api/plan");
+  const { data: ob } = useApi<{ banner: "setup" | "retune" | null }>("/api/onboarding");
   const [menu, setMenu] = useState<TodayItem | null>(null);
   const [toast, setToast] = useState<{ text: string; undo?: () => void } | null>(null);
   const [reorder, setReorder] = useState(false);
@@ -159,6 +160,21 @@ export default function TodayScreen() {
           <Card>
             <Text style={{ color: t.bad, fontWeight: "600" }}>Can't reach your Life server</Text>
             <Text style={{ color: t.sub, marginTop: 4 }}>{error.message}. Check Settings → Server.</Text>
+          </Card>
+        ) : null}
+
+        {ob?.banner ? (
+          <Card style={{ backgroundColor: t.accentSoft, borderColor: t.accentSoft, marginBottom: space.md }}>
+            <Text style={{ color: t.text, fontWeight: "600" }}>
+              {ob.banner === "setup" ? "Set up Life (about 5 minutes)" : "2-minute re-tune: has anything changed?"}
+            </Text>
+            <Text style={{ color: t.sub, marginTop: 2 }}>
+              {ob.banner === "setup" ? "Connect your stuff, check what I noticed, and tell me about your projects." : "New roster pattern, new projects, different hours? Let's keep the plan honest."}
+            </Text>
+            <View style={{ marginTop: space.md, flexDirection: "row", gap: 8 }}>
+              <Button label={ob.banner === "setup" ? "Start" : "Re-tune"} icon="sparkles-outline" small onPress={() => router.push("/onboarding")} />
+              {ob.banner === "retune" ? <Button label="Not now" small kind="ghost" onPress={() => act(() => post("/api/onboarding/retune/dismiss"))} /> : null}
+            </View>
           </Card>
         ) : null}
 

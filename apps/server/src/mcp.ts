@@ -154,7 +154,10 @@ function buildServer(s: Services, auth: Resolved, clientName: () => string) {
           body: args.text,
           url: args.url,
           images: args.screenshotBase64 ? [{ mediaType: args.screenshotBase64.startsWith("/9j") ? "image/jpeg" : "image/png", data: args.screenshotBase64 }] : undefined,
-          hint: args.hint ?? `Page from ${args.source}, read by the user's weekly browser run.`,
+          hint:
+            args.hint === "deadlines" || args.source.toLowerCase() === "moodle"
+              ? `Upcoming uni deadlines read from the user's Moodle (Monash) by their browser run. For EACH line: find an existing uni task for that assessment with list_tasks (match by unit code + title); if found, update its due date if it changed; otherwise add_task (area "uni", title "Do <quiz>" / "Finish <assignment>" / "Revise for <exam>", due exactly as shown in the user's timezone, estimate quizzes 45, assignments 360, exams 480 unless the weighting suggests otherwise, sourceUrl = the link). Don't create events for these.`
+              : (args.hint ?? `Page from ${args.source}, read by the user's weekly browser run.`),
         });
         await s.store.setKv(`pull:${args.source.toLowerCase()}`, { at: new Date().toISOString(), proposed: r.proposed, summary: r.summary });
         return { content: [{ type: "text" as const, text: JSON.stringify({ ok: true, proposed: r.proposed, summary: r.summary }) }] };

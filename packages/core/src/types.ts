@@ -160,6 +160,10 @@ export interface Preferences {
   estimateFactor: Partial<Record<AreaKind, number>>;
   /** When are you sharpest. */
   energyByHour: { morning: Energy; afternoon: Energy; evening: Energy };
+  /** How check-ins sound: gentle (default), direct, or quiet (no check-ins, just the lists). */
+  checkinStyle?: "gentle" | "direct" | "quiet";
+  /** Which kinds of email Life should act on (all on by default). */
+  emailImportance?: { payments: boolean; calendar: boolean; personal: boolean; uni: boolean; asks: boolean };
 }
 
 export const defaultPreferences: Preferences = {

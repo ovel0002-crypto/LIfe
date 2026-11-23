@@ -1,6 +1,8 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useEffect, useState } from "react";
+import { router } from "expo-router";
 import { Linking, Platform, Text, TextInput, View } from "react-native";
+import { UploadIcs } from "../../components/UploadIcs";
 import { Button, Card, Chip, Screen, SectionHeader, Title } from "../../components/ui";
 import { api, getToken, patch, post, setToken } from "../../lib/api";
 import { act, invalidateAll, useApi } from "../../lib/hooks";
@@ -98,6 +100,11 @@ export default function SettingsScreen() {
         </Card>
       ) : null}
 
+      <Card style={{ flexDirection: "row", gap: 8, flexWrap: "wrap", marginBottom: space.md }}>
+        <Button label="About me" icon="person-circle-outline" small kind="secondary" onPress={() => router.push("/about")} />
+        <Button label="Tune Life" icon="sparkles-outline" small kind="secondary" onPress={() => router.push("/onboarding")} />
+      </Card>
+
       <SectionHeader title="Server" />
       <Card style={{ gap: space.md }}>
         <Field label="Access token" value={token} onChange={setTok} secure placeholder="LIFE_API_TOKEN from your server" />
@@ -152,7 +159,7 @@ export default function SettingsScreen() {
         <Field label="Name" value={feed.name} onChange={(v) => setFeed({ ...feed, name: v })} placeholder="Moodle" />
         <Field label="iCal URL" value={feed.url} onChange={(v) => setFeed({ ...feed, url: v })} placeholder="https://learning.monash.edu/calendar/export_execute.php?..." />
         <View style={{ flexDirection: "row", gap: 6, flexWrap: "wrap" }}>
-          {["moodle", "timetable", "calendar"].map((k) => (
+          {["moodle", "timetable", "calendar", "roster"].map((k) => (
             <Chip key={k} label={k} active={feed.kind === k} onPress={() => setFeed({ ...feed, kind: k })} />
           ))}
         </View>
@@ -168,6 +175,7 @@ export default function SettingsScreen() {
         <View style={{ flexDirection: "row" }}>
           <Button label="Add feed" small onPress={addFeed} disabled={!feed.url || !feed.name} />
         </View>
+        <UploadIcs />
       </Card>
 
       <AutoPulls say={say} />
@@ -269,6 +277,7 @@ interface CollectorRow {
   startUrl: string;
   schedule: { weekday: number; hour: number };
   hasSession: boolean;
+  hasCredentials?: boolean;
   lastRun?: string;
   lastResult?: string;
 }
@@ -279,13 +288,18 @@ const DAYS = ["", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 function AutoPulls({ say }: { say: (m: string) => void }) {
   const t = useTheme();
   const { data } = useApi<CollectorRow[]>("/api/collectors");
-  const [form, setForm] = useState({ name: "Humanforce", startUrl: "", weekday: 7, hour: 18 });
+  const [form, setForm] = useState({ name: "Humanforce", startUrl: "https://lunapark.humanforce.com/Roster", weekday: 7, hour: 18, username: "", password: "" });
   const [busy, setBusy] = useState<string | null>(null);
 
   const add = async () => {
-    await act(() => post("/api/collectors", { name: form.name, startUrl: form.startUrl, kind: "roster", schedule: { weekday: form.weekday, hour: form.hour } }));
-    say(`Added. Now save your login: on your PC run  pnpm --filter @life/server login-site ${form.name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`);
-    setForm({ ...form, startUrl: "" });
+    const c = await act(() => post<{ id: string }>("/api/collectors", { name: form.name, startUrl: form.startUrl, kind: "roster", download: true, schedule: { weekday: form.weekday, hour: form.hour } }));
+    if (form.username && form.password) {
+      await act(() => post(`/api/collectors/${c.id}/credentials`, { username: form.username, password: form.password }));
+      say("Added. Life will log in by itself and download your roster weekly. Tap Run now to test it.");
+    } else {
+      say(`Added. Save a login: enter your username/password here, or on your PC run  pnpm --filter @life/server login-site ${c.id}`);
+    }
+    setForm({ ...form, username: "", password: "" });
   };
   const run = async (id: string) => {
     setBusy(id);
@@ -300,8 +314,12 @@ function AutoPulls({ say }: { say: (m: string) => void }) {
       <Card style={{ gap: space.md }}>
         {(data ?? []).map((c) => (
           <View key={c.id} style={{ gap: 4, paddingBottom: 8, borderBottomWidth: 1, borderBottomColor: t.line }}>
-            <Status ok={c.hasSession && !c.lastResult?.startsWith("login")} label={`${c.name} · ${DAYS[c.schedule.weekday]} ${c.schedule.hour}:00`} />
-            <Text style={{ color: t.faint, fontSize: 13 }}>{c.hasSession ? c.lastResult ?? "Not run yet" : `No saved login — run: pnpm --filter @life/server login-site ${c.id}`}</Text>
+            <Status ok={(c.hasSession || !!c.hasCredentials) && !/^(login|bad-password|error)/.test(c.lastResult ?? "")} label={`${c.name} · ${DAYS[c.schedule.weekday]} ${c.schedule.hour}:00`} />
+            <Text style={{ color: t.faint, fontSize: 13 }}>
+              {c.hasSession || c.hasCredentials
+                ? `${c.hasCredentials ? "Logs in by itself. " : ""}${c.lastResult ?? "Not run yet"}`
+                : `No saved login — add your username/password below, or run: pnpm --filter @life/server login-site ${c.id}`}
+            </Text>
             <View style={{ flexDirection: "row", gap: 8 }}>
               <Button label="Run now" small kind="secondary" loading={busy === c.id} onPress={() => run(c.id)} />
               <Button label="Remove" small kind="ghost" onPress={() => act(() => api(`/api/collectors/${c.id}`, { method: "DELETE" }))} />
@@ -312,7 +330,16 @@ function AutoPulls({ say }: { say: (m: string) => void }) {
           Roster: first check whether Humanforce has a calendar link — if it does, add it above as a locked calendar feed instead. Otherwise add the roster page here.
         </Text>
         <Field label="Name" value={form.name} onChange={(v) => setForm({ ...form, name: v })} />
-        <Field label="Roster page URL" value={form.startUrl} onChange={(v) => setForm({ ...form, startUrl: v })} placeholder="https://yourworkplace.humanforce.com/…" />
+        <Field label="Roster page URL" value={form.startUrl} onChange={(v) => setForm({ ...form, startUrl: v })} placeholder="https://yourworkplace.humanforce.com/Roster" />
+        <View style={{ flexDirection: "row", gap: 8 }}>
+          <View style={{ flex: 1 }}>
+            <Field label="Username" value={form.username} onChange={(v) => setForm({ ...form, username: v })} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Field label="Password" value={form.password} onChange={(v) => setForm({ ...form, password: v })} secure />
+          </View>
+        </View>
+        <Text style={{ color: t.faint, fontSize: 12 }}>Stored encrypted on your server and only used to log in and download your roster. Never shown again.</Text>
         <View style={{ flexDirection: "row", gap: 6, flexWrap: "wrap" }}>
           {DAYS.slice(1).map((d, i) => (
             <Chip key={d} label={d} active={form.weekday === i + 1} onPress={() => setForm({ ...form, weekday: i + 1 })} />

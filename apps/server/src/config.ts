@@ -34,6 +34,8 @@ export const config = {
   },
   notion: { token: process.env.NOTION_TOKEN },
   discord: { botToken: process.env.DISCORD_BOT_TOKEN },
+  /** Shared secret of the Outgoing Webhook an admin creates in Tamarin's dashboard. */
+  tamarinSecret: process.env.TAMARIN_WEBHOOK_SECRET,
   telegram: { botToken: process.env.TELEGRAM_BOT_TOKEN, chatId: process.env.TELEGRAM_CHAT_ID },
   webPush: {
     publicKey: process.env.VAPID_PUBLIC_KEY,

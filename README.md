@@ -100,17 +100,57 @@ Moving to the homelab later: copy `infra/` with your `.env`, restore the latest 
 
 | Source | How |
 |---|---|
-| **Moodle** (assignments, quizzes) | In Moodle: Calendar → Import or export calendars → Export → All courses → Get calendar URL. Paste it in Settings → Add feed → `moodle`. Deadlines become uni tasks with due dates. Re-syncs every 30 minutes. |
+| **Moodle** (assignments, quizzes) | Monash has no Moodle calendar export, and the Moodle app is blocked. Instead, a twice-weekly **Claude in Chrome** shortcut reads *Calendar → Upcoming events* in your logged-in Chrome (`claude/scheduled/moodle-deadlines.md`). Life turns each item into a uni task with its due date and updates existing tasks instead of duplicating them. If your university does allow export, use Settings → Add feed → `moodle` instead. |
 | **Timetable** | Your timetable's iCal or subscribe link → Add feed → `timetable`, and choose the lock. |
 | **Google Calendar + Gmail** | Create an OAuth client in Google Cloud (Web app), with redirect `https://LIFE_DOMAIN/api/connect/google/callback`. Enable the Calendar and Gmail APIs and set `GOOGLE_CLIENT_ID/SECRET`. Then use Settings → Connect personal / Connect Monash (Monash signs in through Okta). Life reads your calendar and writes planned work blocks to a separate **"Life – Plan"** calendar, so your main calendar stays clean. |
 | **Monash email** (if Monash blocks third-party apps) | In Monash Gmail, add a filter that forwards everything to your personal Gmail. Life reads it from there. |
 | **Notion** (team action items) | Create an integration at notion.so/my-integrations. A workspace owner may need to approve it. Share the action-items database with it and set `NOTION_TOKEN`. Then in Settings enter the database ID, your name, and the assignee and due property names. Items assigned to you become tasks linked back to Notion. Marking them done in Notion marks them done here. |
-| **Discord** (team server) | Create a bot at discord.com/developers, enable the **Message Content** intent, and set `DISCORD_BOT_TOKEN`. A server admin invites it. In Settings, list the channel IDs it may read, your user ID and your names. Mentions and asks are batched into one triage call every 30 minutes. DMs to the bot are quick capture. (Automating your own account breaks Discord's rules, so a bot is the only safe option.) |
+| **Discord** (team server, via **Tamarin**) | **Life side:** set `TAMARIN_WEBHOOK_SECRET` and fill in Settings → Team: Discord (your user ID, your names, and optionally channel IDs). **Tamarin side:** a Tamarin admin adds an **Outgoing webhook** in Tamarin's dashboard: URL `https://LIFE_DOMAIN/api/hooks/tamarin`, the same secret, the action-item channels, events `message` and `message_edit`. Life checks the HMAC signature, keeps messages that mention you, reply to you or use your name, and batches them into one triage call every 30 minutes. The optional Tamarin change (branch `feat/webhook-mention-filter`) adds a "Only messages about" user filter, so only messages about you leave the server. **Fallback:** Life's own bot, using `DISCORD_BOT_TOKEN`. |
 | **iMessage / Instagram / WhatsApp** | There's no API without a Mac. Use the **weekly admin hour**: it asks for screenshots of the chats that matter, and vision pulls out plans and promises for you to confirm. In between, just tell Life in chat. If the homelab becomes a Mac mini, a BlueBubbles / `chat.db` connector can be added. |
 | **Claude conversations** | Add Life as a custom connector: claude.ai → Customize → Connectors → **+ Add → Add custom connector**. Use the URL `https://LIFE_DOMAIN/mcp` and the request header `Authorization: Bearer <LIFE_API_TOKEN>`. If a setup only takes a URL, use `https://LIFE_DOMAIN/mcp/<LIFE_API_TOKEN>` and keep that URL private. It must be public HTTPS on port 443. Any Claude chat can then read and update your plan, and every change can be undone. |
-| **Work roster (Humanforce)** | First, check whether Humanforce has a calendar link; if it does, add it as a feed with the **Locked** lock. Otherwise, add an **Auto-pull** in Settings. Then, on your computer, run `LIFE_SERVER_URL=https://LIFE_DOMAIN LIFE_API_TOKEN=… pnpm --filter @life/server login-site humanforce`. This opens your Chrome; log in normally and press Enter. The session is stored encrypted with `LIFE_SECRET`. Life reads the page weekly and proposes your shifts as locked events. When the login expires, you get a "Log back into Humanforce" to-do. |
+| **Work roster (Humanforce)** | Go to Settings → **Auto-pulls** and add `https://lunapark.humanforce.com/Roster` with your **username and password**. They're stored encrypted with `LIFE_SECRET`. Each week Life logs in by itself, downloads the roster `.ics` and imports it without AI: shifts become locked work events titled like "Luna Park · Cafe Cook (Food Cafe)", times are read as Melbourne time, and a shift that disappears is proposed for removal in Review. A wrong password gives you a "Check your Humanforce password" to-do. You can also **upload a roster file** you downloaded (Settings → Calendars, or onboarding). |
 | **Instagram DMs** | A weekly, read-only **Claude in Chrome** shortcut in your own Chrome. Follow `claude/scheduled/instagram-dms.md`. It hands results to Life through the connector, or through the `/capture` page. This breaks Instagram's terms; once a week and read-only keeps the risk low, but not zero. |
 | **Telegram** (reliable nudges + capture) | Create a bot with @BotFather and set `TELEGRAM_BOT_TOKEN`. Message it once, then set `TELEGRAM_CHAT_ID` (get it from `https://api.telegram.org/bot<TOKEN>/getUpdates`). Check-in buttons work from Telegram, and you can text it things like "dinner moved to 8". |
+
+## Onboarding ("Set up Life / Tune Life")
+
+On first launch, Today shows a "Set up Life" card. You can re-run setup any time from Settings. Every step can be skipped, and everything can be changed later in **Settings → About me**.
+
+1. **Connect:** the live status of every source, with setup steps for each.
+2. **Here's what I noticed:** Life reads what's connected, then proposes things for you to confirm, fix or ignore, for example:
+   - "You mostly work Saturdays and Sundays at Luna Park, usually 12pm–8pm"
+   - "You're doing FIT2004 and MTH2010"
+   - "These 9 Notion items are overdue: keep, done or drop?"
+3. **Projects:** a short chat. Your projects, their stages and next steps appear as you talk.
+4. **Your rhythm:** your day hours, quiet hours and when you think best.
+5. **What matters:** which kinds of email to act on, the check-in style (gentle, direct or off), and how full to plan your free time.
+6. **Your first plan.**
+
+Every couple of weeks Life offers a 2-minute re-tune.
+
+## Email: what counts as important
+
+Life acts on:
+- bills and payments due, e.g. "Pay Afterpay $93.04", due on the date; overdue notices get top importance
+- bookings and appointments: a locked event, plus a "bring these" prep task the day before
+- personal emails from people: a "Reply to …" task when they asked something
+- uni deadlines, and things people ask you to do
+
+Everything else is ignored. Tapping **Not right** on a proposal teaches Life: two rejections and no accepts from the same sender means it stops reading that sender. You can turn categories off in onboarding.
+
+## Where to run it (Australia)
+
+**BinaryLane, Melbourne** (Australian-owned, NextDC M2, billed in AUD):
+- 4 GB is comfortable with browser auto-pulls and Eunomia.
+- 2 GB works without Eunomia.
+- Prices listed online vary, roughly A$7–15 a month, so check the current page.
+
+**Alternatives:**
+- Vultr Melbourne, about US$12 for 2 GB or US$24 for 4 GB
+- DigitalOcean Sydney
+- Oracle Cloud Always Free (Melbourne/Sydney; free, but sign-up capacity is often short)
+
+You also need a domain with HTTPS on port 443, which Caddy sets up. The claude.ai connector and Tamarin's webhooks require it.
 
 ## Notifications
 

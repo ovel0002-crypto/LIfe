@@ -51,7 +51,7 @@ const assert = (c, m) => { if (!c) { throw new Error("FAIL: " + m); } console.lo
 
     // Task detail sheet from the action sheet.
     await page.goto(base + "/", { waitUntil: "networkidle" });
-    await page.getByText(today.should[0]?.title ?? target.title).first().click();
+    await page.getByText(today.should[0]?.title ?? target.title).last().click();
     await page.getByText("Details & steps").click();
     await page.waitForURL(/\/task\//);
     await page.getByText("left of").first().waitFor({ timeout: 5000 });
@@ -75,6 +75,30 @@ const assert = (c, m) => { if (!c) { throw new Error("FAIL: " + m); } console.lo
     assert(await page.getByText("Screenshots").first().isVisible(), "weekly review opens");
     if (process.env.E2E_AI === "1") assert(await page.getByText("This week's automatic pulls").isVisible(), "pulls card shows in the weekly review");
     if (process.env.SHOTS) await page.screenshot({ path: process.env.SHOTS + "/review.png" });
+    // Onboarding: walk every step (skipping), finish, banner disappears; About me opens.
+    await page.goto(base + "/onboarding", { waitUntil: "networkidle" });
+    await page.getByText("Connect your life").waitFor({ timeout: 10000 });
+    assert(true, "onboarding opens on the Connect step");
+    if (process.env.SHOTS) await page.screenshot({ path: process.env.SHOTS + "/onboarding-connect.png" });
+    await page.getByText("Skip for now").click();
+    await page.getByText("Here's what I noticed").waitFor({ timeout: 10000 });
+    if (process.env.SHOTS) await page.screenshot({ path: process.env.SHOTS + "/onboarding-noticed.png" });
+    for (const title of ["What are you working on?", "Your rhythm", "What matters"]) {
+      await page.getByText("Skip for now").click();
+      await page.getByText(title).waitFor({ timeout: 10000 });
+      if (process.env.SHOTS && title === "Your rhythm") await page.screenshot({ path: process.env.SHOTS + "/onboarding-rhythm.png" });
+    }
+    await page.getByText("Skip for now").click();
+    await page.getByText("Your first plan").waitFor({ timeout: 10000 });
+    await page.getByText("Finish", { exact: true }).click();
+    await page.getByText("You're set up").waitFor({ timeout: 10000 });
+    const ob = await (await page.request.get(base + "/api/onboarding")).json();
+    assert(ob.banner === null && ob.state.completedAt, "finishing onboarding clears the setup banner");
+    await page.goto(base + "/about", { waitUntil: "networkidle" });
+    await page.getByText("Things I remember").waitFor({ timeout: 10000 });
+    assert(true, "About me opens");
+    if (process.env.SHOTS) await page.screenshot({ path: process.env.SHOTS + "/about.png" });
+
     assert(errors.length === 0, "no page errors " + JSON.stringify(errors));
   } finally {
     await browser.close();

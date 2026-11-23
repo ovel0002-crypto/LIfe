@@ -154,6 +154,67 @@ const checks: Check[] = [
       return (Boolean(ev) && Boolean(tentative) && Boolean(speaker)) || `event=${JSON.stringify(evData)} speaker=${Boolean(speaker)} question=${asked} summary=${r.summary}`;
     },
   },
+  {
+    name: "email: Afterpay reminder → 'Pay Afterpay $93.04' due Nov 22",
+    run: async () => {
+      const body = readFileSync(fx("email-afterpay.txt"), "utf8");
+      const r = await s.triage.process({ source: "gmail", title: "Payment reminder", body });
+      const t = (await proposedIn(r.batchId)).map((c) => c.after as { title?: string; due?: string }).find((a) => /93\.04/.test(a?.title ?? ""));
+      return (Boolean(t) && local(t!.due!).toFormat("LLL d") === "Nov 22") || `got ${JSON.stringify(t)} summary=${r.summary}`;
+    },
+  },
+  {
+    name: "email: AGL overdue notice → top-importance task",
+    run: async () => {
+      const r = await s.triage.process({ source: "gmail", title: "Is everything OK?", body: readFileSync(fx("email-agl.txt"), "utf8") });
+      const t = (await proposedIn(r.batchId)).map((c) => c.after as { title?: string; importance?: number }).find((a) => /agl/i.test(a?.title ?? ""));
+      return (Boolean(t) && (t!.importance ?? 0) >= 5) || `got ${JSON.stringify(t)} summary=${r.summary}`;
+    },
+  },
+  {
+    name: "email: VicRoads booking → hard event Wed 25 Nov 11:10 + prep task",
+    run: async () => {
+      const r = await s.triage.process({ source: "gmail", title: "Bookings Confirmation", body: readFileSync(fx("email-vicroads.txt"), "utf8") });
+      const ch = await proposedIn(r.batchId);
+      const ev = ch.filter((c) => c.entityType === "event").map((c) => c.after as { start: string; lock: string; title: string })[0];
+      const prep = ch.filter((c) => c.entityType === "task").map((c) => c.after as { title: string; due?: string }).find((a) => /roadworth|document|bring|gather|rego|plate/i.test(a.title));
+      const okEv = ev && ev.lock === "hard" && local(ev.start).toFormat("ccc d LLL HH:mm") === "Wed 25 Nov 11:10";
+      const okPrep = prep && (!prep.due || Date.parse(prep.due) < Date.parse(ev.start));
+      return (Boolean(okEv) && Boolean(okPrep)) || `event=${ev ? `${ev.title}@${local(ev.start).toFormat("ccc d LLL HH:mm")}/${ev.lock}` : "none"} prep=${JSON.stringify(prep)} summary=${r.summary}`;
+    },
+  },
+  {
+    name: "moodle: deadlines capture → uni tasks, no duplicates on a second run",
+    run: async () => {
+      const lines = [
+        "FIT2004 | Assignment 2 | assignment | Monday, 30 November 2026, 11:55 PM | https://learning.monash.edu/mod/assign/view.php?id=101",
+        "MTH2010 | Week 12 Quiz 4 | quiz | Thursday, 26 November 2026, 11:59 PM | https://learning.monash.edu/mod/quiz/view.php?id=202",
+        "ENG2005 | Lab report 3 | assignment | Friday, 4 December 2026, 5:00 PM — 15% | https://learning.monash.edu/mod/assign/view.php?id=303",
+      ].join("\n");
+      const hint = "Upcoming uni deadlines read from the user's Moodle (Monash) by their browser run. For EACH line: find an existing uni task for that assessment with list_tasks (match by unit code + title); if found, update its due date if it changed; otherwise add_task (area \"uni\", title \"Do <quiz>\" / \"Finish <assignment>\", due exactly as shown in the user's timezone). Don't create events for these.";
+      const r1 = await s.triage.process({ source: "browser", title: "moodle deadlines", body: lines, hint });
+      await s.store.acceptBatch(r1.batchId);
+      const r2 = await s.triage.process({ source: "browser", title: "moodle deadlines", body: lines, hint });
+      const second = await proposedIn(r2.batchId);
+      const tasks = await s.store.list("task");
+      const quiz = tasks.filter((t) => /quiz 4/i.test(t.title));
+      const a2 = tasks.filter((t) => /assignment 2/i.test(t.title) && t.status !== "dropped");
+      const a2Due = a2[0]?.due ? local(a2[0].due).toFormat("LLL d HH:mm") : "none";
+      const newCreates = second.filter((c) => c.op === "create").length;
+      return (quiz.length === 1 && a2.length === 1 && a2Due === "Nov 30 23:55" && newCreates === 0) || `quiz=${quiz.length} a2=${a2.length} a2Due=${a2Due} secondRunCreates=${newCreates}`;
+    },
+  },
+  {
+    name: "onboarding: projects interview → project with stages and next steps",
+    run: async () => {
+      const before = (await s.store.list("project")).length;
+      await chat("(Onboarding: I'm describing my projects. For each one, add_project with sensible stages, set the current stage, and add the next 2–3 concrete steps as tasks. Then ask me briefly about the next one, or whether that's all.)\n\nI'm building a small injection moulding machine with the engineering club. The frame is done and I'm onto the heating barrel now. Done = it can mould a bottle cap.");
+      const projects = await s.store.list("project");
+      const p = projects.find((x) => /mou?ld/i.test(x.title));
+      const steps = p ? (await s.store.list("task")).filter((t) => t.projectId === p.id && t.status !== "done") : [];
+      return (projects.length > before && Boolean(p?.stage) && steps.length >= 2) || `projects ${before}->${projects.length} found=${p?.title} stage=${p?.stage} steps=${steps.length}`;
+    },
+  },
 ];
 
 for (const c of checks) {

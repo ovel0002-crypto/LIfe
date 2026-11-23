@@ -165,12 +165,30 @@ export class Store {
     if (!c || c.status !== "proposed") return undefined;
     await this.applyRaw(c.op, c.entityType, c.entityId, c.after);
     await this.setChangeStatus(c, "applied");
+    const sender = c.batchId ? await this.getKv<string>(`batchSender:${c.batchId}`) : undefined;
+    if (sender) {
+      const stats = (await this.getKv<Record<string, { rejected: number; accepted: number }>>("senderStats")) ?? {};
+      (stats[sender] ??= { rejected: 0, accepted: 0 }).accepted++;
+      await this.setKv("senderStats", stats);
+    }
     return { ...c, status: "applied" };
   }
 
   async reject(id: ID): Promise<void> {
     const c = await this.getChange(id);
-    if (c && c.status === "proposed") await this.setChangeStatus(c, "rejected");
+    if (!c || c.status !== "proposed") return;
+    await this.setChangeStatus(c, "rejected");
+    // Learn: after 2 rejections and no accepts from the same email sender, stop reading them.
+    const sender = c.batchId ? await this.getKv<string>(`batchSender:${c.batchId}`) : undefined;
+    if (!sender) return;
+    const stats = (await this.getKv<Record<string, { rejected: number; accepted: number }>>("senderStats")) ?? {};
+    const st = (stats[sender] ??= { rejected: 0, accepted: 0 });
+    st.rejected++;
+    await this.setKv("senderStats", stats);
+    if (st.rejected >= 2 && st.accepted === 0) {
+      const ignored = (await this.getKv<string[]>("ignoredSenders")) ?? [];
+      if (!ignored.includes(sender)) await this.setKv("ignoredSenders", [...ignored, sender]);
+    }
   }
 
   /** Undo an applied change by applying its inverse. */

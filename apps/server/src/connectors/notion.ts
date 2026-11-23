@@ -19,6 +19,10 @@ export interface NotionConfig {
   dueProp: string;
   projectProp?: string;
   doneValues: string[];
+  /** Statuses meaning "won't happen" → dropped. */
+  cancelValues?: string[];
+  /** Resolved names for relation ids (filled in during sync). */
+  relationNames?: Record<string, string>;
   /** Also import unassigned items? */
   includeUnassigned: boolean;
   area: AreaKind;
@@ -32,6 +36,7 @@ export const defaultNotionConfig: Omit<NotionConfig, "databaseId" | "me"> = {
   dueProp: "Due",
   projectProp: "Project",
   doneValues: ["Done", "Complete", "Completed", "Shipped"],
+  cancelValues: ["Cancelled", "Canceled", "Won't do"],
   includeUnassigned: false,
   area: "uni",
 };
@@ -65,7 +70,10 @@ function date(p?: NotionProp): string | undefined {
   return v.length === 10 ? `${v}T17:00:00` : v;
 }
 
-export function pageToTask(page: NotionPage, cfg: NotionConfig): { task: Omit<Task, "id" | "createdAt">; mine: boolean; done: boolean } {
+export function pageToTask(
+  page: NotionPage,
+  cfg: NotionConfig,
+): { task: Omit<Task, "id" | "createdAt">; mine: boolean; done: boolean; cancelled: boolean; project: string; parentPageId?: string } {
   const props = page.properties;
   const title = text(props[cfg.titleProp]) || "Untitled action item";
   const assignees = people(props[cfg.assigneeProp]);
@@ -73,14 +81,26 @@ export function pageToTask(page: NotionPage, cfg: NotionConfig): { task: Omit<Ta
   const mine = assignees.some((a) => a.id.toLowerCase() === me || a.name.toLowerCase().includes(me));
   const status = text(props[cfg.statusProp]);
   const done = cfg.doneValues.map((v) => v.toLowerCase()).includes(status.toLowerCase());
-  const project = cfg.projectProp ? text(props[cfg.projectProp]) : "";
+  const cancelled = (cfg.cancelValues ?? []).map((v) => v.toLowerCase()).includes(status.toLowerCase());
+  // A team tag may be a select ("Executive Admin") or a relation to a Projects database (resolved by id).
+  const rawProject = cfg.projectProp ? text(props[cfg.projectProp]) : "";
+  const project = rawProject
+    .split(",")
+    .map((x) => cfg.relationNames?.[x.trim()] ?? x.trim())
+    .filter(Boolean)
+    .join(", ");
+  const parentRel = Object.values(props).find((p) => p.type === "relation" && /parent/i.test(String((p as { name?: string }).name ?? "")));
+  const parentPageId = parentRel ? text(parentRel).split(",")[0] || undefined : undefined;
   return {
     mine: mine || (cfg.includeUnassigned && assignees.length === 0),
     done,
+    cancelled,
+    project,
+    parentPageId,
     task: {
       title: /^[A-Z][a-z]+\b/.test(title) ? title : `Do: ${title}`,
       area: cfg.area,
-      status: done ? "done" : "todo",
+      status: done ? "done" : cancelled ? "dropped" : "todo",
       estimateMinutes: 60,
       due: date(props[cfg.dueProp]),
       importance: 3,
@@ -102,6 +122,16 @@ async function notionFetch(path: string, body?: unknown) {
   return res.json() as Promise<{ results: NotionPage[]; has_more: boolean; next_cursor: string | null }>;
 }
 
+async function pageTitle(id: string): Promise<string | undefined> {
+  try {
+    const p = (await notionFetch(`/pages/${id}`)) as unknown as NotionPage;
+    const t = Object.values(p.properties ?? {}).find((x) => x.type === "title");
+    return t ? text(t) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Incremental sync using last_edited_time; updates titles/dues/status, never your estimates. */
 export async function syncNotion(store: Store, pages?: NotionPage[]) {
   const cfg = await store.getKv<NotionConfig>("notion");
@@ -119,18 +149,44 @@ export async function syncNotion(store: Store, pages?: NotionPage[]) {
       cursor = r.has_more ? r.next_cursor ?? undefined : undefined;
     } while (cursor);
   }
+  // Resolve relation ids (team/project tags) to names once, then cache them.
+  const names = { ...(cfg.relationNames ?? {}) };
+  if (cfg.projectProp && !pages.every((p) => !p.properties[cfg.projectProp!])) {
+    for (const p of pages) {
+      const prop = p.properties[cfg.projectProp];
+      if (prop?.type !== "relation") continue;
+      for (const id of text(prop).split(",").filter(Boolean)) if (!names[id]) names[id] = (await pageTitle(id)) ?? id;
+    }
+  }
+  const cfgWithNames = { ...cfg, relationNames: names };
+
   const tasks = await store.list("task");
+  const projects = await store.list("project");
   const batchId = newId("notion_");
   let created = 0;
   let updated = 0;
+  let overdue = 0;
+  const projectIdFor = async (name: string) => {
+    if (!name) return undefined;
+    const first = name.split(",")[0].trim();
+    let p = projects.find((x) => x.title.toLowerCase() === first.toLowerCase());
+    if (!p) {
+      p = { id: newId("prj_"), title: first, area: cfg.area, status: "active", source: "notion" };
+      await store.create("project", p, { actor: "connector", reason: "Team in Notion", batchId });
+      projects.push(p);
+    }
+    return p.id;
+  };
+  const nowMs = Date.now();
   for (const page of pages) {
-    const { task, mine, done } = pageToTask(page, cfg);
+    const { task, mine, done, cancelled, project } = pageToTask(page, cfgWithNames);
     const existing = tasks.find((t) => t.notes?.includes(`[notion:${page.id}]`));
     if (existing) {
       const patch: Partial<Task> = {};
       if (existing.title !== task.title) patch.title = task.title;
       if (existing.due !== task.due) patch.due = task.due;
       if (done && existing.status !== "done") Object.assign(patch, { status: "done", completedAt: new Date().toISOString() });
+      if (cancelled && existing.status !== "dropped") patch.status = "dropped";
       if (!mine && existing.status !== "done") patch.status = "dropped"; // reassigned away from you
       if (Object.keys(patch).length) {
         await store.update("task", existing.id, patch, { actor: "connector", reason: "Changed in Notion", batchId });
@@ -138,10 +194,24 @@ export async function syncNotion(store: Store, pages?: NotionPage[]) {
       }
       continue;
     }
-    if (!mine || done) continue;
-    await store.create("task", { id: newId("tsk_"), createdAt: new Date().toISOString(), ...task }, { actor: "connector", reason: "Assigned to you in Notion", batchId });
+    if (!mine || done || cancelled) continue;
+    const projectId = await projectIdFor(project);
+    // Already overdue when first seen → don't flood "Must do"; hold it for a quick keep/done/drop decision.
+    const isOverdue = task.due !== undefined && Date.parse(task.due) < nowMs;
+    await store.create(
+      "task",
+      {
+        id: newId("tsk_"),
+        createdAt: new Date().toISOString(),
+        ...task,
+        projectId,
+        ...(isOverdue ? { status: "waiting" as const, waitingOn: "your decision — overdue in Notion", notes: `${task.notes}\n[overdue-import]` } : {}),
+      },
+      { actor: "connector", reason: "Assigned to you in Notion", batchId },
+    );
+    if (isOverdue) overdue++;
     created++;
   }
-  await store.setKv("notion", { ...cfg, lastSync: new Date().toISOString() });
-  return { created, updated, seen: pages.length };
+  await store.setKv("notion", { ...cfgWithNames, lastSync: new Date().toISOString() });
+  return { created, updated, overdue, seen: pages.length };
 }
